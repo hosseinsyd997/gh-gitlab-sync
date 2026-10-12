@@ -275,6 +275,13 @@ class GitLab:
         r.raise_for_status()
         return r.json()
 
+    def branch_exists(self, project_path, branch):
+        r = self.s.get(f"{self.api}/projects/{self._pid(project_path)}/repository/branches/{requests.utils.quote(branch, safe='')}")
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
+
     def update_mr(self, project_path, iid, **fields):
         r = self.s.put(f"{self.api}/projects/{self._pid(project_path)}/merge_requests/{iid}", data=fields)
         r.raise_for_status()
@@ -350,6 +357,15 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                 log.info("[%s] NEW GitHub PR #%s -> creating GitLab MR", gh_repo, n)
                 if not dry_run:
                     try:
+                        if not gl.branch_exists(gl_project, pr["head"]["ref"]):
+                            if not cfg["sync"].get("push_new_branches", False):
+                                log.warning("[%s] GitHub PR #%s branch '%s' not found in GitLab yet "
+                                            "(repo mirror is GitLab->GitHub only, so this doesn't auto-arrive) "
+                                            "and push_new_branches is off — skipping, will retry next cycle.",
+                                            gh_repo, n, pr["head"]["ref"])
+                                continue
+                            log.info("[%s] pushing branch '%s' from GitHub to GitLab first", gh_repo, pr["head"]["ref"])
+                            push_branch_to_gitlab(cfg, gh_repo, gl_project, pr["head"]["ref"])
                         created = gl.create_mr(gl_project, pr["title"], body, pr["head"]["ref"], pr["base"]["ref"])
                         state.link(gh_repo, gl_project, "pr_mr", n, created["iid"], "github")
                     except requests.HTTPError as e:
@@ -424,7 +440,7 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
 
 def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     """Push a GitLab-only branch up to GitHub so a PR can be opened for it.
-    Requires git + a working credential helper / token-embedded remote on this host."""
+    Uses an Authorization header instead of an embedded-in-URL credential."""
     import subprocess
     import tempfile
     token = cfg["github"]["token"]
@@ -432,8 +448,26 @@ def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     work = tempfile.mkdtemp(prefix="ghglsync-")
     subprocess.run(["git", "clone", "--branch", branch, "--depth", "1",
                     f"{gl_url}/{gl_project}.git", work], check=True)
-    subprocess.run(["git", "push",
-                    f"https://x-access-token:{token}@github.com/{gh_repo}.git",
+    auth_header = "Authorization: Bearer " + token
+    subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
+                    f"https://github.com/{gh_repo}.git",
+                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work)
+
+
+def push_branch_to_gitlab(cfg, gh_repo, gl_project, branch):
+    """Push a GitHub-only branch down to GitLab so an MR can be opened for it.
+    Needed because this repo mirror only flows GitLab -> GitHub, not the reverse.
+    Uses an Authorization header instead of an embedded-in-URL credential."""
+    import subprocess
+    import tempfile
+    gl_token = cfg["gitlab"]["token"]
+    gl_url = cfg["gitlab"]["url"].rstrip("/")
+    work = tempfile.mkdtemp(prefix="ghglsync-")
+    subprocess.run(["git", "clone", "--branch", branch, "--depth", "1",
+                    f"https://github.com/{gh_repo}.git", work], check=True)
+    auth_header = "PRIVATE-TOKEN: " + gl_token
+    subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
+                    f"{gl_url}/{gl_project}.git",
                     f"HEAD:refs/heads/{branch}"], check=True, cwd=work)
 
 
