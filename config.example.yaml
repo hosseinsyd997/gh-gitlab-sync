@@ -1,0 +1,28 @@
+github:
+  token: "ghp_xxx"                # repo scope (add push scope only if push_new_branches: true)
+  api: "https://api.github.com"
+
+gitlab:
+  url: "http://192.168.100.180"   # your internal GitLab base URL
+  token: "glpat-xxx"              # Personal/Project Access Token, scope: api
+
+sync:
+  state_db: "./state.db"
+  marker_prefix: "gh-gitlab-sync"  # used inside the hidden HTML marker, don't change after first run
+  push_new_branches: false         # see README "MR/PR branch caveat" before enabling
+  sync_prs_mrs: true
+  sync_comments: true
+  poll_window_safety_minutes: 10   # re-check this many minutes before "last sync" to absorb clock drift
+
+# Either list every pair explicitly:
+repo_pairs:
+  - github: "mehrdevteam/mehraz-front-end"
+    gitlab: "mehrdevteam/mehraz-front-end"
+  - github: "mehrdevteam/mehraz-back-end"
+    gitlab: "mehrdevteam/mehraz-back-end"
+  # ... add one pair per mirrored repo you want synced
+
+# Or, instead of listing pairs, auto-discover by matching repo name across both sides:
+# auto_discover: true
+# github_owners: ["hosseinsyd997", "mehrdevteam"]
+# gitlab_group_prefix: "mehrdevteam"   # GitLab group(s) to search for a same-named project
