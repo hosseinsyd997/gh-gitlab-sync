@@ -341,6 +341,8 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                     created = gl.create_issue(gl_project, item["title"], body, labels=item.get("labels") and [l["name"] for l in item["labels"]])
                     gl_iid = created["iid"]
                     state.link(gh_repo, gl_project, "issue", n, gl_iid, "github")
+                    if item["state"] == "closed":
+                        gl.update_issue(gl_project, gl_iid, state_event="close")
                 n_requests += 1
             else:
                 log.info("[%s] UPDATE GitHub issue #%s -> GitLab issue !%s", gh_repo, n, gl_iid)
@@ -391,6 +393,12 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                         try:
                             created = gl.create_mr(gl_project, pr["title"], body, pr["head"]["ref"], pr["base"]["ref"])
                             state.link(gh_repo, gl_project, "pr_mr", n, created["iid"], "github")
+                            if pr["state"] == "closed":
+                                if pr.get("merged_at"):
+                                    gl.create_note(gl_project, "mr", created["iid"], "*This PR was merged on GitHub.*")
+                                    gl.update_mr(gl_project, created["iid"], state_event="close")
+                                else:
+                                    gl.update_mr(gl_project, created["iid"], state_event="close")
                         except requests.HTTPError as e:
                             if e.response is not None and e.response.status_code == 409:
                                 existing = gl.find_mr_by_branches(gl_project, pr["head"]["ref"], pr["base"]["ref"])
@@ -433,6 +441,8 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                 if not dry_run:
                     created = gh.create_issue(gh_repo, item["title"], body)
                     state.link(gh_repo, gl_project, "issue", created["number"], iid, "gitlab")
+                    if item["state"] == "closed":
+                        gh.update_issue(gh_repo, created["number"], state="closed")
                 n_requests += 1
             else:
                 log.info("[%s] UPDATE GitLab issue !%s -> GitHub issue #%s", gh_repo, iid, gh_n)
@@ -464,6 +474,10 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                         try:
                             created = gh.create_pr(gh_repo, mr["title"], body, mr["source_branch"], mr["target_branch"])
                             state.link(gh_repo, gl_project, "pr_mr", created["number"], iid, "gitlab")
+                            if mr["state"] in ("closed", "merged"):
+                                if mr["state"] == "merged":
+                                    gh.create_comment(gh_repo, created["number"], "*This MR was merged on GitLab.*")
+                                gh.update_pr(gh_repo, created["number"], state="closed")
                         except requests.HTTPError as e:
                             if e.response is not None and e.response.status_code == 422:
                                 existing = gh.find_pr_by_branch(gh_repo, mr["source_branch"], mr["target_branch"])
