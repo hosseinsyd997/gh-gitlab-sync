@@ -8,7 +8,9 @@ Usage:
 """
 import argparse
 import datetime as dt
+import fcntl
 import logging
+import os
 import re
 import sqlite3
 import sys
@@ -552,6 +554,19 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     cfg = yaml.safe_load(Path(args.config).read_text())
+
+    lock_path = cfg["sync"].get("lock_file") or (Path(cfg["sync"]["state_db"]).parent / "sync.lock")
+    lock_fp = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log.warning("Another sync.py instance is already running (lock held at %s) — exiting without doing anything. "
+                    "This is normal if the previous cycle is still finishing a slow operation (e.g. a branch push); "
+                    "it prevents two instances writing the state.db at once.", lock_path)
+        return
+    lock_fp.write(str(os.getpid()))
+    lock_fp.flush()
+
     state = State(cfg["sync"]["state_db"])
     gh = GitHub(cfg["github"]["token"], cfg["github"].get("api", "https://api.github.com"))
     gl = GitLab(cfg["gitlab"]["url"], cfg["gitlab"]["token"])
