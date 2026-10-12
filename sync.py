@@ -21,7 +21,7 @@ import yaml
 log = logging.getLogger("gh-gitlab-sync")
 
 MARKER_RE_GH = re.compile(r"<!--\s*gh-gitlab-sync:gitlab:(issue|mr):(\d+)\s*-->")
-MARKER_RE_GL = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|pr):(\d+)\s*-->")
+MARKER_RE_GL = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|mr):(\d+)\s*-->")
 
 
 def gh_marker(kind, number):

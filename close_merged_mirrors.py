@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 import yaml
 
-MARKER_RE_GH = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|pr):(\d+)\s*-->")
+MARKER_RE_GH = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|mr):(\d+)\s*-->")
 
 
 def main():
@@ -64,7 +64,7 @@ def main():
         mrs = get_all(gl, f"{gl_api}/projects/{pid}/merge_requests", {"state": "opened"})
         for mr in mrs:
             m = MARKER_RE_GH.search(mr.get("description") or "")
-            if not m or m.group(1) != "pr":
+            if not m or m.group(1) != "mr":
                 continue
             pr_number = int(m.group(2))
             total_checked += 1

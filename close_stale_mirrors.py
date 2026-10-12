@@ -17,7 +17,7 @@ import requests
 import yaml
 from pathlib import Path
 
-MARKER_RE_GH = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|pr):(\d+)\s*-->")
+MARKER_RE_GH = re.compile(r"<!--\s*gh-gitlab-sync:github:(issue|mr):(\d+)\s*-->")
 
 
 def main():
