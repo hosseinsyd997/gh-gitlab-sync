@@ -530,14 +530,16 @@ def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
+    # NOTE: no --depth here -- a shallow clone cannot be pushed to most git servers
+    # (GitLab rejects it outright with "shallow update not allowed").
     gl_auth_header = _git_basic_auth_header("oauth2", gl_token)
     subprocess.run(["git", "-c", f"http.extraHeader={gl_auth_header}", "clone",
-                    "--branch", branch, "--depth", "1",
-                    f"{gl_url}/{gl_project}.git", work], check=True, env=env, timeout=120)
+                    "--branch", branch, "--single-branch",
+                    f"{gl_url}/{gl_project}.git", work], check=True, env=env, timeout=300)
     gh_auth_header = _git_basic_auth_header("x-access-token", token)
     subprocess.run(["git", "-c", f"http.extraHeader={gh_auth_header}", "push",
                     f"https://github.com/{gh_repo}.git",
-                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env, timeout=120)
+                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env, timeout=300)
 
 
 def push_branch_to_gitlab(cfg, gh_repo, gl_project, branch):
@@ -553,14 +555,16 @@ def push_branch_to_gitlab(cfg, gh_repo, gl_project, branch):
     gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
+    # NOTE: no --depth here -- a shallow clone cannot be pushed to most git servers
+    # (GitLab rejects it outright with "shallow update not allowed").
     gh_auth_header = _git_basic_auth_header("x-access-token", token)
     subprocess.run(["git", "-c", f"http.extraHeader={gh_auth_header}", "clone",
-                    "--branch", branch, "--depth", "1",
-                    f"https://github.com/{gh_repo}.git", work], check=True, env=env, timeout=120)
+                    "--branch", branch, "--single-branch",
+                    f"https://github.com/{gh_repo}.git", work], check=True, env=env, timeout=300)
     gl_auth_header = _git_basic_auth_header("oauth2", gl_token)
     subprocess.run(["git", "-c", f"http.extraHeader={gl_auth_header}", "push",
                     f"{gl_url}/{gl_project}.git",
-                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env, timeout=120)
+                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env, timeout=300)
 
 
 def main():
