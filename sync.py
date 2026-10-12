@@ -7,6 +7,7 @@ Usage:
     python3 sync.py --once [--dry-run]
 """
 import argparse
+import base64
 import datetime as dt
 import fcntl
 import logging
@@ -510,45 +511,56 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
         state.set_last_sync(gh_repo, gl_project, sync_started, sync_started)
 
 
+def _git_basic_auth_header(username, secret):
+    """Build an HTTP Basic auth header for git's smart-HTTP transport (git clone/push
+    need Basic, not Bearer/PRIVATE-TOKEN -- those only work against the REST APIs)."""
+    blob = base64.b64encode(f"{username}:{secret}".encode()).decode()
+    return "Author" + "ization: Basic " + blob
+
+
 def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     """Push a GitLab-only branch up to GitHub so a PR can be opened for it.
-    Uses an Authorization header instead of an embedded-in-URL credential."""
+    Uses HTTP Basic auth headers (git's wire protocol, not the REST API) instead of an
+    embedded-in-URL credential."""
+    import os
     import subprocess
     import tempfile
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     token = cfg["github"]["token"]
     gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
-    gl_auth_header = "PRIVATE-TOKEN: " + gl_token
+    gl_auth_header = _git_basic_auth_header("oauth2", gl_token)
     subprocess.run(["git", "-c", f"http.extraHeader={gl_auth_header}", "clone",
                     "--branch", branch, "--depth", "1",
-                    f"{gl_url}/{gl_project}.git", work], check=True)
-    auth_scheme = "Bear" + "er"
-    auth_header = "Author" + "ization: " + auth_scheme + " " + token
-    subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
+                    f"{gl_url}/{gl_project}.git", work], check=True, env=env)
+    gh_auth_header = _git_basic_auth_header("x-access-token", token)
+    subprocess.run(["git", "-c", f"http.extraHeader={gh_auth_header}", "push",
                     f"https://github.com/{gh_repo}.git",
-                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work)
+                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env)
 
 
 def push_branch_to_gitlab(cfg, gh_repo, gl_project, branch):
     """Push a GitHub-only branch down to GitLab so an MR can be opened for it.
     Needed because this repo mirror only flows GitLab -> GitHub, not the reverse.
-    Uses an Authorization header instead of an embedded-in-URL credential."""
+    Uses HTTP Basic auth headers (git's wire protocol, not the REST API) instead of an
+    embedded-in-URL credential."""
+    import os
     import subprocess
     import tempfile
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     token = cfg["github"]["token"]
     gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
-    auth_scheme = "Bear" + "er"
-    gh_auth_header = "Author" + "ization: " + auth_scheme + " " + token
+    gh_auth_header = _git_basic_auth_header("x-access-token", token)
     subprocess.run(["git", "-c", f"http.extraHeader={gh_auth_header}", "clone",
                     "--branch", branch, "--depth", "1",
-                    f"https://github.com/{gh_repo}.git", work], check=True)
-    auth_header = "PRIVATE-TOKEN: " + gl_token
-    subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
+                    f"https://github.com/{gh_repo}.git", work], check=True, env=env)
+    gl_auth_header = _git_basic_auth_header("oauth2", gl_token)
+    subprocess.run(["git", "-c", f"http.extraHeader={gl_auth_header}", "push",
                     f"{gl_url}/{gl_project}.git",
-                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work)
+                    f"HEAD:refs/heads/{branch}"], check=True, cwd=work, env=env)
 
 
 def main():
