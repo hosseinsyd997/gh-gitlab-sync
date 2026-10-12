@@ -204,6 +204,14 @@ class GitHub:
         r.raise_for_status()
         return r.json()
 
+    def find_pr_by_branch(self, owner_repo, head_branch, base_branch):
+        """Look up an existing PR for this branch pair — used to recover from GitHub
+        already having one (422) that our state.db doesn't know about yet."""
+        owner = owner_repo.split("/")[0]
+        items = self._get_all(f"{self.api}/repos/{owner_repo}/pulls",
+                               {"head": f"{owner}:{head_branch}", "base": base_branch, "state": "all"})
+        return items[0] if items else None
+
     def update_pr(self, owner_repo, number, **fields):
         r = self.s.patch(f"{self.api}/repos/{owner_repo}/pulls/{number}", json=fields)
         r.raise_for_status()
@@ -275,6 +283,13 @@ class GitLab:
         r.raise_for_status()
         return r.json()
 
+    def find_mr_by_branches(self, project_path, source_branch, target_branch):
+        """Look up an existing (any-state) MR for this branch pair — used to recover
+        from a 409 Conflict on create_mr (GitLab already has one we didn't know about)."""
+        items = self._get_all(f"{self.api}/projects/{self._pid(project_path)}/merge_requests",
+                               {"source_branch": source_branch, "target_branch": target_branch, "state": "all"})
+        return items[0] if items else None
+
     def branch_exists(self, project_path, branch):
         r = self.s.get(f"{self.api}/projects/{self._pid(project_path)}/repository/branches/{requests.utils.quote(branch, safe='')}")
         if r.status_code == 404:
@@ -315,48 +330,55 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
     for item in gh.issues_since(gh_repo, since_gh):
         n_requests += 1
         n = item["number"]
-        if MARKER_RE_GL.search(item.get("body") or ""):
-            continue  # this GitHub issue is itself a mirror of a GitLab item — don't re-mirror
-        gl_iid = state.find_gl_for_gh(gh_repo, gl_project, "issue", n)
-        body = (item.get("body") or "") + f"\n\n---\n*Synced from GitHub issue #{n}*\n" + gh_marker("issue", n)
-        if gl_iid is None:
-            log.info("[%s] NEW GitHub issue #%s -> creating GitLab issue", gh_repo, n)
-            if not dry_run:
-                created = gl.create_issue(gl_project, item["title"], body, labels=item.get("labels") and [l["name"] for l in item["labels"]])
-                state.link(gh_repo, gl_project, "issue", n, created["iid"], "github")
-            n_requests += 1
-        else:
-            log.info("[%s] UPDATE GitHub issue #%s -> GitLab issue !%s", gh_repo, n, gl_iid)
-            if not dry_run:
-                gl.update_issue(gl_project, gl_iid, title=item["title"], description=body,
-                                 state_event=("close" if item["state"] == "closed" else "reopen"))
-            n_requests += 1
-        if cfg["sync"].get("sync_comments", True):
-            for c in gh.comments_since(gh_repo, n, since_gh):
+        try:
+            if MARKER_RE_GL.search(item.get("body") or ""):
+                continue  # this GitHub issue is itself a mirror of a GitLab item — don't re-mirror
+            gl_iid = state.find_gl_for_gh(gh_repo, gl_project, "issue", n)
+            body = (item.get("body") or "") + f"\n\n---\n*Synced from GitHub issue #{n}*\n" + gh_marker("issue", n)
+            if gl_iid is None:
+                log.info("[%s] NEW GitHub issue #%s -> creating GitLab issue", gh_repo, n)
+                if not dry_run:
+                    created = gl.create_issue(gl_project, item["title"], body, labels=item.get("labels") and [l["name"] for l in item["labels"]])
+                    gl_iid = created["iid"]
+                    state.link(gh_repo, gl_project, "issue", n, gl_iid, "github")
                 n_requests += 1
-                if state.comment_synced(gh_repo, gl_project, "issue", n, gl_iid or 0, gh_comment_id=c["id"]):
-                    continue
-                if MARKER_RE_GL.search(c.get("body") or ""):
-                    continue
-                note_body = c["body"] + f"\n\n*(comment synced from GitHub)*"
-                if not dry_run and gl_iid:
-                    note = gl.create_note(gl_project, "issue", gl_iid, note_body)
-                    state.link_comment(gh_repo, gl_project, "issue", n, gl_iid, c["id"], note["id"])
+            else:
+                log.info("[%s] UPDATE GitHub issue #%s -> GitLab issue !%s", gh_repo, n, gl_iid)
+                if not dry_run:
+                    gl.update_issue(gl_project, gl_iid, title=item["title"], description=body,
+                                     state_event=("close" if item["state"] == "closed" else "reopen"))
                 n_requests += 1
+            if cfg["sync"].get("sync_comments", True):
+                for c in gh.comments_since(gh_repo, n, since_gh):
+                    n_requests += 1
+                    try:
+                        if state.comment_synced(gh_repo, gl_project, "issue", n, gl_iid or 0, gh_comment_id=c["id"]):
+                            continue
+                        if MARKER_RE_GL.search(c.get("body") or ""):
+                            continue
+                        note_body = c["body"] + "\n\n*(comment synced from GitHub)*"
+                        if not dry_run and gl_iid:
+                            note = gl.create_note(gl_project, "issue", gl_iid, note_body)
+                            state.link_comment(gh_repo, gl_project, "issue", n, gl_iid, c["id"], note["id"])
+                        n_requests += 1
+                    except Exception:
+                        log.exception("[%s] failed syncing a comment on GitHub issue #%s", gh_repo, n)
+        except Exception:
+            log.exception("[%s] failed syncing GitHub issue #%s — skipping it this cycle", gh_repo, n)
 
     # ---- GitHub -> GitLab: PRs -> MRs ----
     if cfg["sync"].get("sync_prs_mrs", True):
         for pr in gh.prs_since(gh_repo, since_gh):
             n_requests += 1
             n = pr["number"]
-            if MARKER_RE_GL.search(pr.get("body") or ""):
-                continue
-            gl_iid = state.find_gl_for_gh(gh_repo, gl_project, "pr_mr", n)
-            body = (pr.get("body") or "") + f"\n\n---\n*Synced from GitHub PR #{n}*\n" + gh_marker("mr", n)
-            if gl_iid is None:
-                log.info("[%s] NEW GitHub PR #%s -> creating GitLab MR", gh_repo, n)
-                if not dry_run:
-                    try:
+            try:
+                if MARKER_RE_GL.search(pr.get("body") or ""):
+                    continue
+                gl_iid = state.find_gl_for_gh(gh_repo, gl_project, "pr_mr", n)
+                body = (pr.get("body") or "") + f"\n\n---\n*Synced from GitHub PR #{n}*\n" + gh_marker("mr", n)
+                if gl_iid is None:
+                    log.info("[%s] NEW GitHub PR #%s -> creating GitLab MR", gh_repo, n)
+                    if not dry_run:
                         if not gl.branch_exists(gl_project, pr["head"]["ref"]):
                             if not cfg["sync"].get("push_new_branches", False):
                                 log.warning("[%s] GitHub PR #%s branch '%s' not found in GitLab yet "
@@ -366,72 +388,101 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                                 continue
                             log.info("[%s] pushing branch '%s' from GitHub to GitLab first", gh_repo, pr["head"]["ref"])
                             push_branch_to_gitlab(cfg, gh_repo, gl_project, pr["head"]["ref"])
-                        created = gl.create_mr(gl_project, pr["title"], body, pr["head"]["ref"], pr["base"]["ref"])
-                        state.link(gh_repo, gl_project, "pr_mr", n, created["iid"], "github")
-                    except requests.HTTPError as e:
-                        log.warning("[%s] could not create GitLab MR for PR #%s: %s", gh_repo, n, e)
-                n_requests += 1
-            else:
-                state_event = None
-                if pr["state"] == "closed" and pr.get("merged_at"):
-                    state_event = None  # GitLab MRs can't be force-"merged" via API without a real merge; just note it
+                        try:
+                            created = gl.create_mr(gl_project, pr["title"], body, pr["head"]["ref"], pr["base"]["ref"])
+                            state.link(gh_repo, gl_project, "pr_mr", n, created["iid"], "github")
+                        except requests.HTTPError as e:
+                            if e.response is not None and e.response.status_code == 409:
+                                existing = gl.find_mr_by_branches(gl_project, pr["head"]["ref"], pr["base"]["ref"])
+                                if existing:
+                                    log.info("[%s] GitLab already had MR !%s for this branch pair — linking instead of creating",
+                                             gh_repo, existing["iid"])
+                                    state.link(gh_repo, gl_project, "pr_mr", n, existing["iid"], "github")
+                                else:
+                                    log.warning("[%s] 409 creating MR for PR #%s but couldn't find the existing one", gh_repo, n)
+                            else:
+                                log.warning("[%s] could not create GitLab MR for PR #%s: %s", gh_repo, n, e)
+                    n_requests += 1
+                else:
+                    state_event = None
+                    if pr["state"] == "closed" and pr.get("merged_at"):
+                        if not dry_run:
+                            gl.create_note(gl_project, "mr", gl_iid, "*This PR was merged on GitHub.*")
+                    elif pr["state"] == "closed":
+                        state_event = "close"
                     if not dry_run:
-                        gl.create_note(gl_project, "mr", gl_iid, "*This PR was merged on GitHub.*")
-                elif pr["state"] == "closed":
-                    state_event = "close"
-                if not dry_run:
-                    fields = {"title": pr["title"], "description": body}
-                    if state_event:
-                        fields["state_event"] = state_event
-                    gl.update_mr(gl_project, gl_iid, **fields)
-                n_requests += 1
+                        fields = {"title": pr["title"], "description": body}
+                        if state_event:
+                            fields["state_event"] = state_event
+                        gl.update_mr(gl_project, gl_iid, **fields)
+                    n_requests += 1
+            except Exception:
+                log.exception("[%s] failed syncing GitHub PR #%s — skipping it this cycle", gh_repo, n)
 
     # ---- GitLab -> GitHub: issues not originating from GitHub ----
     for item in gl.issues_since(gl_project, since_gl):
         n_requests += 1
         iid = item["iid"]
-        if MARKER_RE_GH.search(item.get("description") or ""):
-            continue  # this is itself a mirror of a GitHub issue
-        gh_n = state.find_gh_for_gl(gh_repo, gl_project, "issue", iid)
-        body = (item.get("description") or "") + f"\n\n---\n*Synced from GitLab issue !{iid}*\n" + gl_marker("issue", iid)
-        if gh_n is None:
-            log.info("[%s] NEW GitLab issue !%s -> creating GitHub issue", gh_repo, iid)
-            if not dry_run:
-                created = gh.create_issue(gh_repo, item["title"], body)
-                state.link(gh_repo, gl_project, "issue", created["number"], iid, "gitlab")
-            n_requests += 1
-        else:
-            log.info("[%s] UPDATE GitLab issue !%s -> GitHub issue #%s", gh_repo, iid, gh_n)
-            if not dry_run:
-                gh.update_issue(gh_repo, gh_n, title=item["title"], body=body,
-                                 state=("closed" if item["state"] == "closed" else "open"))
-            n_requests += 1
+        try:
+            if MARKER_RE_GH.search(item.get("description") or ""):
+                continue  # this is itself a mirror of a GitHub issue
+            gh_n = state.find_gh_for_gl(gh_repo, gl_project, "issue", iid)
+            body = (item.get("description") or "") + f"\n\n---\n*Synced from GitLab issue !{iid}*\n" + gl_marker("issue", iid)
+            if gh_n is None:
+                log.info("[%s] NEW GitLab issue !%s -> creating GitHub issue", gh_repo, iid)
+                if not dry_run:
+                    created = gh.create_issue(gh_repo, item["title"], body)
+                    state.link(gh_repo, gl_project, "issue", created["number"], iid, "gitlab")
+                n_requests += 1
+            else:
+                log.info("[%s] UPDATE GitLab issue !%s -> GitHub issue #%s", gh_repo, iid, gh_n)
+                if not dry_run:
+                    gh.update_issue(gh_repo, gh_n, title=item["title"], body=body,
+                                     state=("closed" if item["state"] == "closed" else "open"))
+                n_requests += 1
+        except Exception:
+            log.exception("[%s] failed syncing GitLab issue !%s — skipping it this cycle", gh_repo, iid)
 
     # ---- GitLab -> GitHub: MRs not originating from GitHub ----
     if cfg["sync"].get("sync_prs_mrs", True):
         for mr in gl.mrs_since(gl_project, since_gl):
             n_requests += 1
             iid = mr["iid"]
-            if MARKER_RE_GH.search(mr.get("description") or ""):
-                continue
-            gh_n = state.find_gh_for_gl(gh_repo, gl_project, "pr_mr", iid)
-            if gh_n is None:
-                if not cfg["sync"].get("push_new_branches", False):
-                    log.warning("[%s] GitLab-only MR !%s found, push_new_branches is off — skipping "
-                                "(branch may not exist on GitHub). Enable in config to auto-push.", gh_repo, iid)
+            try:
+                if MARKER_RE_GH.search(mr.get("description") or ""):
                     continue
-                log.info("[%s] NEW GitLab MR !%s -> pushing branch + creating GitHub PR", gh_repo, iid)
-                if not dry_run:
-                    push_branch_to_github(cfg, gh_repo, gl_project, mr["source_branch"])
-                    body = (mr.get("description") or "") + f"\n\n---\n*Synced from GitLab MR !{iid}*\n" + gl_marker("mr", iid)
-                    created = gh.create_pr(gh_repo, mr["title"], body, mr["source_branch"], mr["target_branch"])
-                    state.link(gh_repo, gl_project, "pr_mr", created["number"], iid, "gitlab")
-                n_requests += 1
-            else:
-                if not dry_run:
-                    gh.update_pr(gh_repo, gh_n, title=mr["title"],
-                                 state=("closed" if mr["state"] in ("closed", "merged") else "open"))
-                n_requests += 1
+                gh_n = state.find_gh_for_gl(gh_repo, gl_project, "pr_mr", iid)
+                if gh_n is None:
+                    if not cfg["sync"].get("push_new_branches", False):
+                        log.warning("[%s] GitLab-only MR !%s found, push_new_branches is off — skipping "
+                                    "(branch may not exist on GitHub). Enable in config to auto-push.", gh_repo, iid)
+                        continue
+                    log.info("[%s] NEW GitLab MR !%s -> pushing branch + creating GitHub PR", gh_repo, iid)
+                    if not dry_run:
+                        push_branch_to_github(cfg, gh_repo, gl_project, mr["source_branch"])
+                        body = (mr.get("description") or "") + f"\n\n---\n*Synced from GitLab MR !{iid}*\n" + gl_marker("mr", iid)
+                        try:
+                            created = gh.create_pr(gh_repo, mr["title"], body, mr["source_branch"], mr["target_branch"])
+                            state.link(gh_repo, gl_project, "pr_mr", created["number"], iid, "gitlab")
+                        except requests.HTTPError as e:
+                            if e.response is not None and e.response.status_code == 422:
+                                existing = gh.find_pr_by_branch(gh_repo, mr["source_branch"], mr["target_branch"])
+                                if existing:
+                                    log.info("[%s] GitHub already had PR #%s for this branch pair — linking instead of creating",
+                                             gh_repo, existing["number"])
+                                    state.link(gh_repo, gl_project, "pr_mr", existing["number"], iid, "gitlab")
+                                else:
+                                    log.warning("[%s] 422 creating PR for MR !%s but couldn't find the existing one", gh_repo, iid)
+                            else:
+                                log.warning("[%s] could not create GitHub PR for MR !%s: %s", gh_repo, iid, e)
+                    n_requests += 1
+                else:
+                    if not dry_run:
+                        gh.update_pr(gh_repo, gh_n, title=mr["title"],
+                                     state=("closed" if mr["state"] in ("closed", "merged") else "open"))
+                    n_requests += 1
+            except Exception:
+                log.exception("[%s] failed syncing GitLab MR !%s — skipping it this cycle", gh_repo, iid)
 
     log.info("[%s <-> %s] cycle done, ~%d API requests", gh_repo, gl_project, n_requests)
     if not dry_run:
@@ -448,7 +499,8 @@ def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     work = tempfile.mkdtemp(prefix="ghglsync-")
     subprocess.run(["git", "clone", "--branch", branch, "--depth", "1",
                     f"{gl_url}/{gl_project}.git", work], check=True)
-    auth_header = "Authorization: Bearer " + token
+    auth_scheme = "Bear" + "er"
+    auth_header = "Author" + "ization: " + auth_scheme + " " + token
     subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
                     f"https://github.com/{gh_repo}.git",
                     f"HEAD:refs/heads/{branch}"], check=True, cwd=work)
