@@ -3,26 +3,61 @@ github:
   api: "https://api.github.com"
 
 gitlab:
-  url: "http://192.168.100.180"   # your internal GitLab base URL
+  url: "http://127.0.0.1"         # or https://192.168.100.180 if that's what your server needs
   token: "glpat-xxx"              # Personal/Project Access Token, scope: api
 
 sync:
-  state_db: "./state.db"
+  state_db: "/opt/gh-gitlab-sync/state.db"   # absolute path — don't use a relative "./state.db"
   marker_prefix: "gh-gitlab-sync"  # used inside the hidden HTML marker, don't change after first run
   push_new_branches: false         # see README "MR/PR branch caveat" before enabling
   sync_prs_mrs: true
   sync_comments: true
-  poll_window_safety_minutes: 10   # re-check this many minutes before "last sync" to absorb clock drift
+  poll_window_safety_minutes: 10
 
-# Either list every pair explicitly:
+# Only mehrdevteam org repos are mirrored to GitLab — personal account repos have no
+# GitLab counterpart at all, so they're intentionally NOT listed here. Keep this list in
+# sync with the "Active projects" table in the Obsidian vault's
+# Infra/GitHub-Projects-Map.md — add a pair here only when a new project is confirmed
+# mirrored on GitLab.
 repo_pairs:
   - github: "mehrdevteam/mehraz-front-end"
     gitlab: "mehrdevteam/mehraz-front-end"
   - github: "mehrdevteam/mehraz-back-end"
     gitlab: "mehrdevteam/mehraz-back-end"
-  # ... add one pair per mirrored repo you want synced
-
-# Or, instead of listing pairs, auto-discover by matching repo name across both sides:
-# auto_discover: true
-# github_owners: ["hosseinsyd997", "mehrdevteam"]
-# gitlab_group_prefix: "mehrdevteam"   # GitLab group(s) to search for a same-named project
+  - github: "mehrdevteam/app-mehromah-front-end"
+    gitlab: "mehrdevteam/app-mehromah-front-end"
+  - github: "mehrdevteam/app-mehromah-back-end"
+    gitlab: "mehrdevteam/app-mehromah-back-end"
+  - github: "mehrdevteam/app-mehromah-core-package"
+    gitlab: "mehrdevteam/app-mehromah-core-package"
+  - github: "mehrdevteam/mehromah"
+    gitlab: "mehrdevteam/mehromah"
+  - github: "mehrdevteam/delta"
+    gitlab: "mehrdevteam/delta"
+  - github: "mehrdevteam/mehrsa"
+    gitlab: "mehrdevteam/mehrsa"
+  - github: "mehrdevteam/entekhabium-front-end"
+    gitlab: "mehrdevteam/entekhabium-front-end"
+  - github: "mehrdevteam/entekhabium-back-end"
+    gitlab: "mehrdevteam/entekhabium-back-end"
+  - github: "mehrdevteam/konkuriom-front-end"
+    gitlab: "mehrdevteam/konkuriom-front-end"
+  - github: "mehrdevteam/konkuriom-back-end"
+    gitlab: "mehrdevteam/konkuriom-back-end"
+  - github: "mehrdevteam/sampadium-front-end"
+    gitlab: "mehrdevteam/sampadium-front-end"
+  - github: "mehrdevteam/sampadium-back-end"
+    gitlab: "mehrdevteam/sampadium-back-end"
+  - github: "mehrdevteam/emtehanium-frontend"
+    gitlab: "mehrdevteam/emtehanium-frontend"
+  - github: "mehrdevteam/emtehanium-backend"
+    gitlab: "mehrdevteam/emtehanium-backend"
+  - github: "mehrdevteam/braingym-front-end"
+    gitlab: "mehrdevteam/braingym-front-end"
+  - github: "mehrdevteam/braingym-back-end"
+    gitlab: "mehrdevteam/braingym-back-end"
+  - github: "mehrdevteam/virabrain"
+    gitlab: "mehrdevteam/virabrain"
+  - github: "mehrdevteam/mehraz-image-proccessing"
+    gitlab: "mehrdevteam/mehraz-image-proccessing"
+  # template-front-end / template-back-end deliberately excluded — unused boilerplate
