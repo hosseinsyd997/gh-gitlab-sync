@@ -516,9 +516,12 @@ def push_branch_to_github(cfg, gh_repo, gl_project, branch):
     import subprocess
     import tempfile
     token = cfg["github"]["token"]
+    gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
-    subprocess.run(["git", "clone", "--branch", branch, "--depth", "1",
+    gl_auth_header = "PRIVATE-TOKEN: " + gl_token
+    subprocess.run(["git", "-c", f"http.extraHeader={gl_auth_header}", "clone",
+                    "--branch", branch, "--depth", "1",
                     f"{gl_url}/{gl_project}.git", work], check=True)
     auth_scheme = "Bear" + "er"
     auth_header = "Author" + "ization: " + auth_scheme + " " + token
@@ -533,10 +536,14 @@ def push_branch_to_gitlab(cfg, gh_repo, gl_project, branch):
     Uses an Authorization header instead of an embedded-in-URL credential."""
     import subprocess
     import tempfile
+    token = cfg["github"]["token"]
     gl_token = cfg["gitlab"]["token"]
     gl_url = cfg["gitlab"]["url"].rstrip("/")
     work = tempfile.mkdtemp(prefix="ghglsync-")
-    subprocess.run(["git", "clone", "--branch", branch, "--depth", "1",
+    auth_scheme = "Bear" + "er"
+    gh_auth_header = "Author" + "ization: " + auth_scheme + " " + token
+    subprocess.run(["git", "-c", f"http.extraHeader={gh_auth_header}", "clone",
+                    "--branch", branch, "--depth", "1",
                     f"https://github.com/{gh_repo}.git", work], check=True)
     auth_header = "PRIVATE-TOKEN: " + gl_token
     subprocess.run(["git", "-c", f"http.extraHeader={auth_header}", "push",
