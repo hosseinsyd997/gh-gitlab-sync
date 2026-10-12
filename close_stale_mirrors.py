@@ -52,7 +52,7 @@ def main():
         issues = get_all(f"{gl_url}/projects/{pid}/issues", {"state": "opened"})
         for it in issues:
             if MARKER_RE_GH.search(it.get("description") or ""):
-                print(f"[{project}] closing issue !{it['iid']}: {it['title'][:70]}")
+                print(f"[{project}] closing issue !{it['iid']}: {it['title'][:70]}  {it.get('web_url','')}")
                 if not args.dry_run:
                     r = s.put(f"{gl_url}/projects/{pid}/issues/{it['iid']}", data={"state_event": "close"})
                     r.raise_for_status()
@@ -61,7 +61,7 @@ def main():
         mrs = get_all(f"{gl_url}/projects/{pid}/merge_requests", {"state": "opened"})
         for mr in mrs:
             if MARKER_RE_GH.search(mr.get("description") or ""):
-                print(f"[{project}] closing MR !{mr['iid']}: {mr['title'][:70]}")
+                print(f"[{project}] closing MR !{mr['iid']}: {mr['title'][:70]}  {mr.get('web_url','')}")
                 if not args.dry_run:
                     r = s.put(f"{gl_url}/projects/{pid}/merge_requests/{mr['iid']}", data={"state_event": "close"})
                     r.raise_for_status()
