@@ -413,9 +413,14 @@ def sync_pair(cfg, state: State, gh: GitHub, gl: GitLab, gh_repo, gl_project, dr
                     n_requests += 1
                 else:
                     state_event = None
+                    already_merged_noted = False
                     if pr["state"] == "closed" and pr.get("merged_at"):
+                        state_event = "close"
                         if not dry_run:
-                            gl.create_note(gl_project, "mr", gl_iid, "*This PR was merged on GitHub.*")
+                            existing_notes = gl.notes_since(gl_project, "mr", gl_iid, None)
+                            already_merged_noted = any("merged on GitHub" in (n.get("body") or "") for n in existing_notes)
+                            if not already_merged_noted:
+                                gl.create_note(gl_project, "mr", gl_iid, "*This PR was merged on GitHub.*")
                     elif pr["state"] == "closed":
                         state_event = "close"
                     if not dry_run:
